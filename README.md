@@ -113,3 +113,52 @@ function calls, or loads and stores) and ignore others.
 > Koushik Sen, Daniel Zheng.
 >
 > In _Proceedings of the IEEE/ACM 46th International Conference on Software Engineering: Software Engineering in Practice (ICSE-SEIP 2024)_. ([PDF preprint](https://storage.googleapis.com/gweb-research2023-media/pubtools/pdf/f4c7d2ebfbf919c19bec9f58565c1a2f865f7e98.pdf))
+
+## Visualizer
+
+The analysis visualizer is a web-based HUD that lets you *see* tensor-shape
+inference end-to-end — from raw execution events, through constraint solving, to
+the symbolic shape annotations — including the hyper-parameter perturbation that
+prevents falsely unifying numerically-equal-but-semantically-distinct dimensions.
+
+![Pynsy shape-inference visualizer](docs/visualizer.png)
+
+It has three panels:
+
+- **Events** (left): a scrollable timeline of execution events; rows that carry a
+  tensor shape are highlighted (e.g. `randn (128×784)`). Step through with the
+  `↑`/`↓` arrow keys.
+- **Source** (top right): the instrumented source with inline magenta shape
+  annotations (`# ↳ inputs: [batch, size] ⇒ 128 784`). The current event's line
+  is highlighted.
+- **Analysis** (bottom right), three tabs (keys `1`/`2`/`3`):
+  - **Shapes** — per-line symbolic and concrete shapes.
+  - **Constraints** — variable assignments, the template matches the solver
+    used (✓/✗ with the supporting evidence), and the resulting equivalence
+    classes. Click a `v`N variable to cross-highlight its appearances.
+  - **FP Avoidance** — the `hyper_parameter()` perturbations, e.g.
+    `hidden3 1024 → 1025`, showing which dimension would have been falsely
+    unified without the bump.
+
+### Usage
+
+The visualizer is a two-step flow: run the analysis to capture an enriched
+trace, then serve it.
+
+```bash
+# Step 1: run the analysis to produce outdir/visualizer/visualizer_trace.json
+python3 -m pynsy.main --config configs/visualizer.toml --module pynsy.demos.mnist2
+
+# Step 2: serve the HUD (opens http://localhost:8080 in your browser)
+python3 -m pynsy.visualizer.server
+```
+
+The server has a few options:
+
+```bash
+python3 -m pynsy.visualizer.server --port 8080 \
+  --trace pynsy/outdir/visualizer/visualizer_trace.json --no-open
+```
+
+To visualize a different program, point the `--module` flag at it (and adjust
+`include`/`exclude` in `configs/visualizer.toml` to match its package).

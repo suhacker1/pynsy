@@ -1,0 +1,15 @@
+analyzers = [
+  "pynsy.visualizer.trace_capture"
+]
+
+[instrumentation_rules]
+include = [
+  "pynsy.demos",
+]
+exclude = [
+  "jax",
+  "optax",
+  "pynsy",
+  "tensorflow",
+  "keras",
+]

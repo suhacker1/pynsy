@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<!--
+ Copyright 2023 The pynsy Authors. Licensed under the Apache License, Version 2.0.
+ Single-page HUD for pynsy tensor-shape inference. No build step, no framework.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>pynsy · shape inference visualizer</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --panel2: #11161d; --border: #30363d;
+    --fg: #c9d1d9; --dim: #8b949e; --accent: #58a6ff; --magenta: #d2a8ff;
+    --green: #3fb950; --red: #f85149; --yellow: #d29922; --sel: #1f6feb33;
+    --mono: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font-family: var(--mono); font-size: 13px; height: 100vh; overflow: hidden;
+  }
+  #app {
+    display: grid; grid-template-columns: 280px 1fr; grid-template-rows: 100vh;
+    height: 100vh; overflow: hidden;
+  }
+  .col-head {
+    padding: 8px 12px; font-weight: 600; color: var(--dim);
+    border-bottom: 1px solid var(--border); text-transform: uppercase;
+    font-size: 11px; letter-spacing: .08em; background: var(--panel2);
+  }
+
+  /* left: timeline */
+  #timeline-col { border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
+  #timeline { overflow-y: auto; flex: 1; }
+  .evt {
+    padding: 3px 12px; cursor: pointer; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; border-left: 3px solid transparent;
+  }
+  .evt:hover { background: var(--panel); }
+  .evt.sel { background: var(--sel); border-left-color: var(--accent); }
+  .evt.has-shape { color: var(--fg); }
+  .evt.no-shape { color: var(--dim); }
+  .evt .ix { color: var(--dim); margin-right: 6px; }
+  .evt .ty { color: var(--accent); }
+  .evt .shape { color: var(--magenta); }
+
+  /* right */
+  #main-col { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  #source-wrap { flex: 1; overflow: auto; min-height: 0; }
+  table.src { border-collapse: collapse; width: 100%; }
+  table.src td { vertical-align: top; padding: 0; }
+  td.ln {
+    text-align: right; color: var(--dim); padding: 0 10px 0 14px;
+    user-select: none; width: 1%; white-space: nowrap;
+  }
+  td.code { white-space: pre; padding-right: 16px; }
+  tr.line.cur td { background: var(--sel); }
+  tr.line.cur td.ln { color: var(--accent); font-weight: 700; }
+  .annot { color: var(--magenta); }
+
+  /* bottom analysis */
+  #analysis { height: 42%; border-top: 1px solid var(--border); display: flex; flex-direction: column; background: var(--panel2); }
+  #tabs { display: flex; border-bottom: 1px solid var(--border); }
+  .tab {
+    padding: 8px 16px; cursor: pointer; color: var(--dim);
+    border-bottom: 2px solid transparent;
+  }
+  .tab.active { color: var(--fg); border-bottom-color: var(--accent); }
+  .tab .k { color: var(--dim); font-size: 10px; }
+  #tab-body { overflow: auto; flex: 1; padding: 12px 16px; }
+  .pane { display: none; }
+  .pane.active { display: block; }
+
+  table.grid { border-collapse: collapse; width: 100%; margin-bottom: 8px; }
+  table.grid th, table.grid td {
+    text-align: left; padding: 4px 10px; border-bottom: 1px solid var(--border);
+    font-weight: 400;
+  }
+  table.grid th { color: var(--dim); font-size: 11px; text-transform: uppercase; }
+  .held { color: var(--green); }
+  .failed { color: var(--red); }
+  .var { cursor: pointer; padding: 0 3px; border-radius: 3px; }
+  .var:hover { background: var(--panel); }
+  .var.hi { background: var(--yellow); color: #000; }
+  .chip {
+    display: inline-block; padding: 1px 8px; border-radius: 10px;
+    background: var(--panel); border: 1px solid var(--border); margin: 0 4px 4px 0;
+  }
+  .ann-name { color: var(--magenta); font-weight: 600; }
+  .bump { color: var(--yellow); }
+  .arrow { color: var(--dim); margin: 0 6px; }
+  h3 { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; margin: 4px 0 6px; }
+  .fp-card {
+    border: 1px solid var(--border); border-radius: 6px; padding: 10px 14px;
+    margin-bottom: 8px; background: var(--panel);
+  }
+  .fp-card.bumped { border-color: var(--yellow); }
+  .big { font-size: 20px; }
+  #err { padding: 24px; color: var(--red); }
+  .muted { color: var(--dim); }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="timeline-col">
+    <div class="col-head">Events <span id="evt-count" class="muted"></span></div>
+    <div id="timeline"></div>
+  </div>
+  <div id="main-col">
+    <div class="col-head" id="source-title">Source</div>
+    <div id="source-wrap"></div>
+    <div id="analysis">
+      <div id="tabs">
+        <div class="tab active" data-pane="shapes">Shapes <span class="k">[1]</span></div>
+        <div class="tab" data-pane="constraints">Constraints <span class="k">[2]</span></div>
+        <div class="tab" data-pane="fp">FP Avoidance <span class="k">[3]</span></div>
+      </div>
+      <div id="tab-body">
+        <div class="pane active" id="pane-shapes"></div>
+        <div class="pane" id="pane-constraints"></div>
+        <div class="pane" id="pane-fp"></div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+const esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+let DATA = null, events = [], sel = 0, highlightedVar = null;
+
+async function load() {
+  const res = await fetch('/api/trace');
+  if (!res.ok) { document.getElementById('app').innerHTML =
+      '<div id="err">No trace found. Run the analysis first:<br><br>'
+      + 'python -m pynsy.main --config configs/visualizer.toml --module pynsy.demos.mnist2</div>';
+    return; }
+  DATA = await res.json();
+  events = DATA.events || [];
+  renderTimeline();
+  renderSource();
+  renderShapes();
+  renderConstraints();
+  renderFP();
+  document.getElementById('evt-count').textContent = '(' + events.length + ')';
+  if (events.length) selectEvent(0);
+  applyHash();
+}
+
+// Shareable view state: #tab=fp&evt=80 deep-links a tab + selected event.
+function applyHash() {
+  const h = new URLSearchParams(location.hash.slice(1));
+  if (h.get('tab')) switchTab(h.get('tab'));
+  if (h.get('evt') !== null && h.get('evt') !== undefined && h.get('evt') !== '')
+    selectEvent(+h.get('evt'));
+}
+window.addEventListener('hashchange', applyHash);
+
+// The module with source/annotations — NOT events[0].module_name, which is the
+// package __init__ ("pynsy.demos") that runs before the target module.
+function primaryModule() {
+  const keys = Object.keys(DATA.source_files || {});
+  if (keys.length) return keys[0];
+  return (DATA.metadata.modules || [])[0] || null;
+}
+
+function hasShape(e) {
+  return (e.result_and_args || []).some(r => Array.isArray(r.abs));
+}
+function shapeStr(e) {
+  const r = (e.result_and_args || []).find(r => Array.isArray(r.abs));
+  return r ? '(' + r.abs.join('×') + ')' : '';
+}
+
+function renderTimeline() {
+  const tl = document.getElementById('timeline');
+  tl.innerHTML = events.map(e => {
+    const sh = hasShape(e);
+    return `<div class="evt ${sh ? 'has-shape' : 'no-shape'}" data-ix="${e.index}">`
+      + `<span class="ix">${e.index}</span>`
+      + `<span class="ty">${esc(e.type)}</span> `
+      + `${esc(e.name || '')} `
+      + `<span class="shape">${sh ? esc(shapeStr(e)) : ''}</span></div>`;
+  }).join('');
+  tl.querySelectorAll('.evt').forEach(el =>
+    el.onclick = () => selectEvent(+el.dataset.ix));
+}
+
+function renderSource() {
+  const mod = primaryModule();
+  const sf = DATA.source_files[mod];
+  const title = document.getElementById('source-title');
+  if (!sf) { document.getElementById('source-wrap').innerHTML =
+      '<div class="muted" style="padding:16px">No source available.</div>'; return; }
+  title.textContent = mod + '  ·  ' + sf.path;
+  const annByLine = (DATA.analysis.annotations[mod]) || {};
+  let rows = '';
+  sf.lines.forEach((line, i) => {
+    const lineno = i + 1;
+    rows += `<tr class="line" id="L${lineno}"><td class="ln">${lineno}</td>`
+      + `<td class="code">${esc(line) || ' '}</td></tr>`;
+    const anns = annByLine[String(lineno)];
+    if (anns) {
+      const indent = (line.match(/^\s*/) || [''])[0];
+      anns.forEach(a => {
+        rows += `<tr class="annot-row"><td class="ln"></td><td class="code annot">`
+          + `${esc(indent)}# ↳ ${esc(a.name)}: [${a.symbolic_shape.map(esc).join(', ')}]`
+          + ` ⇒ ${esc((a.concrete_shapes[0]||[]).join(' '))}</td></tr>`;
+      });
+    }
+  });
+  document.getElementById('source-wrap').innerHTML =
+    '<table class="src"><tbody>' + rows + '</tbody></table>';
+}
+
+function selectEvent(ix) {
+  sel = ix;
+  document.querySelectorAll('.evt').forEach(el =>
+    el.classList.toggle('sel', +el.dataset.ix === ix));
+  const cur = document.querySelector('.evt.sel');
+  if (cur) cur.scrollIntoView({block: 'nearest'});
+  const e = events.find(x => x.index === ix);
+  if (!e) return;
+  document.querySelectorAll('tr.line.cur').forEach(el => el.classList.remove('cur'));
+  const lineEl = document.getElementById('L' + e.lineno);
+  if (lineEl) { lineEl.classList.add('cur'); lineEl.scrollIntoView({block: 'center'}); }
+}
+
+function renderShapes() {
+  const mod = primaryModule();
+  const ann = (DATA.analysis.annotations[mod]) || {};
+  let rows = '';
+  Object.keys(ann).map(Number).sort((a,b)=>a-b).forEach(ln => {
+    ann[String(ln)].forEach(a => {
+      rows += `<tr><td>${ln}</td><td class="ann-name">${esc(a.name)}</td>`
+        + `<td class="annot">[${a.symbolic_shape.map(esc).join(', ')}]</td>`
+        + `<td class="muted">${esc((a.concrete_shapes[0]||[]).join(' × '))}</td></tr>`;
+    });
+  });
+  document.getElementById('pane-shapes').innerHTML =
+    '<table class="grid"><thead><tr><th>Line</th><th>Name</th>'
+    + '<th>Symbolic shape</th><th>Concrete</th></tr></thead><tbody>'
+    + rows + '</tbody></table>';
+}
+
+function vchip(v) { return `<span class="var" data-var="${v}">v${v}</span>`; }
+
+function renderConstraints() {
+  const A = DATA.analysis;
+  // var assignments
+  let va = A.var_assignments.map(r =>
+    `<tr><td>${r.location_id}</td>`
+    + `<td>${r.var_ids.map(vchip).join(' ')}</td>`
+    + `<td class="muted">${(r.location_key||[]).slice(-2).map(esc).join(' · ')}</td>`
+    + `<td class="muted">${r.num_observations}</td></tr>`).join('');
+  // solving trace
+  let st = A.solving_trace.map(s =>
+    `<tr><td><span class="${s.held?'held':'failed'}">${s.held?'✓':'✗'}</span></td>`
+    + `<td><code>${esc(s.template)}</code></td>`
+    + `<td>${vchip(s.target_var)} = ${s.candidate_vars.map(vchip).join(', ')}</td>`
+    + `<td class="muted">loc ${s.location_id}, ${s.states_checked} states</td></tr>`).join('');
+  // equivalence classes
+  let ec = A.equivalence_classes.map(c =>
+    `<div class="chip"><span class="ann-name">${esc(c.annotation)}</span>: `
+    + c.var_ids.map(vchip).join(' ') + `</div>`).join('');
+  document.getElementById('pane-constraints').innerHTML =
+    `<h3>Variable assignments</h3>`
+    + `<table class="grid"><thead><tr><th>Loc</th><th>Vars</th><th>Where</th><th>Obs</th></tr></thead><tbody>${va}</tbody></table>`
+    + `<h3>Solving trace (template matches)</h3>`
+    + `<table class="grid"><thead><tr><th></th><th>Tmpl</th><th>Binding</th><th>Evidence</th></tr></thead><tbody>${st}</tbody></table>`
+    + `<h3>Equivalence classes → annotations</h3>${ec}`;
+  document.querySelectorAll('.var').forEach(el =>
+    el.onclick = () => toggleVar(el.dataset.var));
+}
+
+function toggleVar(v) {
+  highlightedVar = (highlightedVar === v) ? null : v;
+  document.querySelectorAll('.var').forEach(el =>
+    el.classList.toggle('hi', highlightedVar !== null && el.dataset.var === highlightedVar));
+}
+
+function renderFP() {
+  const hps = DATA.analysis.hyper_parameters || [];
+  if (!hps.length) {
+    document.getElementById('pane-fp').innerHTML =
+      '<div class="muted">No hyper_parameter() calls in this trace.</div>';
+    return;
+  }
+  const seen = {};
+  let html = '<p class="muted">Numerically-equal dimensions are perturbed so the '
+    + 'solver does not falsely unify semantically distinct sizes.</p>';
+  hps.forEach(h => {
+    const dup = seen[h.original_value];
+    seen[h.original_value] = true;
+    html += `<div class="fp-card ${h.was_bumped?'bumped':''}">`
+      + `<span class="ann-name">${esc(h.dim_name)}</span> `
+      + `<span class="big">${h.original_value}</span>`;
+    if (h.was_bumped) {
+      html += `<span class="arrow">→</span><span class="big bump">${h.perturbed_value}</span>`
+        + ` <span class="muted">bumped: value ${h.original_value} already taken`
+        + ` — without this it would falsely unify with the earlier dimension</span>`;
+    } else {
+      html += ` <span class="muted">${dup?'(unchanged)':'first use of this value'}</span>`;
+    }
+    html += `</div>`;
+  });
+  document.getElementById('pane-fp').innerHTML = html;
+}
+
+function switchTab(pane) {
+  document.querySelectorAll('.tab').forEach(t =>
+    t.classList.toggle('active', t.dataset.pane === pane));
+  document.querySelectorAll('.pane').forEach(p =>
+    p.classList.toggle('active', p.id === 'pane-' + pane));
+}
+document.querySelectorAll('.tab').forEach(t =>
+  t.onclick = () => switchTab(t.dataset.pane));
+
+document.addEventListener('keydown', ev => {
+  if (ev.key === 'ArrowDown') { ev.preventDefault(); step(1); }
+  else if (ev.key === 'ArrowUp') { ev.preventDefault(); step(-1); }
+  else if (ev.key === '1') switchTab('shapes');
+  else if (ev.key === '2') switchTab('constraints');
+  else if (ev.key === '3') switchTab('fp');
+});
+function step(d) {
+  const ixs = events.map(e => e.index);
+  let pos = ixs.indexOf(sel);
+  pos = Math.max(0, Math.min(ixs.length - 1, pos + d));
+  selectEvent(ixs[pos]);
+}
+
+load();
+</script>
+</body>
+</html>
